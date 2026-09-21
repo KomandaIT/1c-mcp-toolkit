@@ -13,6 +13,7 @@ Validates: Requirements 1.4, 2.1, 3.1, 4.1, 5.3, 5.4, 6.2, 6.3, 6.4
 import json
 import logging
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -35,6 +36,7 @@ from .command_queue import command_queue, channel_command_queue
 from .config import settings
 from .mcp_handler import get_mcp_server
 from .channel_registry import channel_registry, ChannelRegistry, DEFAULT_CHANNEL
+from . import admin_corpus, corpus
 from .channel_middleware import ChannelMiddleware
 from .query_encoding_middleware import QueryEncodingMiddleware
 from .channel_sse_transport import ChannelAwareSseTransport
@@ -191,12 +193,19 @@ async def lifespan(app: Starlette):
     logger.info(f"Log level: {settings.log_level}")
     logger.info(f"Command timeout: {settings.timeout}s")
     logger.info("MCP server available at /mcp endpoint")
-    
+
+    # Corpus flush worker: raw pre-anonymization results → JSONL
+    corpus_task: Optional[asyncio.Task] = None
+    if settings.corpus_enabled:
+        corpus_task = asyncio.ensure_future(corpus.flush_worker_forever())
+
     # Start the MCP session manager
     async with mcp_server.session_manager.run():
         yield
-    
+
     # Shutdown
+    if corpus_task is not None:
+        corpus_task.cancel()
     logger.info("1C MCP Toolkit Proxy shutting down")
 
 
@@ -427,7 +436,14 @@ async def anonymization_mappings(request: Request) -> JSONResponse:
     raw_channel = request.query_params.get("channel", DEFAULT_CHANNEL)
     channel = ChannelRegistry.validate_channel_id(raw_channel)
 
-    if not settings.anonymization_enabled:
+    # Пер-канальный флаг (X-Anonymize-Pii, прокидывает gateway приоритетнее);
+    # fallback — глобальный выключатель для автономного использования.
+    per_channel = channel_registry.get_anonymize_enabled(channel)
+    anonymization_enabled = (
+        settings.anonymization_enabled if per_channel is None else per_channel
+    )
+
+    if not anonymization_enabled:
         return JSONResponse(content={
             "enabled": False, "mappings": [], "stats": {}, "count": 0
         })
@@ -494,6 +510,14 @@ routes = [
     Route("/api/get_screenshot", get_screenshot_handler, methods=["POST"]),
     Route("/api/restart_1c_session", restart_1c_session_handler, methods=["POST"]),
     Route("/api/close_1c_session", close_1c_session_handler, methods=["POST"]),
+    # Corpus admin: UI + API, session-cookie auth inside admin_corpus
+    Route("/admin/corpus", admin_corpus.page, methods=["GET"]),
+    Route("/admin/corpus/login", admin_corpus.login, methods=["POST"]),
+    Route("/admin/corpus/logout", admin_corpus.logout, methods=["POST"]),
+    Route("/admin/corpus/files", admin_corpus.files, methods=["GET"]),
+    Route("/admin/corpus/flush", admin_corpus.flush, methods=["POST"]),
+    Route("/admin/corpus/file/{filename}", admin_corpus.download, methods=["GET"]),
+    Route("/admin/corpus/file/{filename}", admin_corpus.delete, methods=["DELETE"]),
 ]
 
 app = Starlette(

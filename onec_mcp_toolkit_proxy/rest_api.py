@@ -31,7 +31,7 @@ from .tools import (
     SubmitForDeanonymizationParams,
     GetScreenshotParams,
 )
-from .channel_registry import ChannelRegistry, DEFAULT_CHANNEL
+from .channel_registry import channel_registry, ChannelRegistry, DEFAULT_CHANNEL
 
 logger = logging.getLogger(__name__)
 
@@ -1223,7 +1223,13 @@ async def submit_for_deanonymization_handler(request: Request) -> JSONResponse:
         return _validation_error_response(e)
 
     # Единый контракт: HTTP 200 + success:false при отключенной анонимизации
-    if not settings.anonymization_enabled:
+    # (пер-канальный флаг из X-Anonymize-Pii; fallback — глобальный выключатель)
+    channel = _get_channel(request)
+    per_channel = channel_registry.get_anonymize_enabled(channel)
+    anonymization_enabled = (
+        settings.anonymization_enabled if per_channel is None else per_channel
+    )
+    if not anonymization_enabled:
         return JSONResponse(
             content={"success": False, "error": "Tool is not available: anonymization is disabled"}
         )

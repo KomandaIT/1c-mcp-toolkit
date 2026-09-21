@@ -29,14 +29,16 @@ class AnonymizerRegistry:
 
     @classmethod
     async def ensure_dictionary_loaded(cls, channel: str) -> None:
-        """Ensure dictionary matcher is loaded for this channel's anonymizer.
-        Called from async context before anonymization. No-op if disabled.
+        """Ensure this channel's anonymizer uses the current dictionary matcher.
+
+        Called from async context before anonymization. Never blocks: the
+        preloader returns None while the background load/revalidation is in
+        progress, and the previously installed matcher (if any) keeps working.
+        No-op if dictionary feature is disabled.
         """
         anon = cls.get(channel)
-        if anon._dict_matcher is not None:
-            return  # already loaded
         matcher = await dictionary_preloader.get_matcher(channel)
-        if matcher is not None:
+        if matcher is not None and anon._dict_matcher is not matcher:
             anon.set_dict_matcher(matcher)
 
     @classmethod

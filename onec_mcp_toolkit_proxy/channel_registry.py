@@ -30,6 +30,7 @@ class ChannelRegistry:
     
     def __init__(self):
         self._sessions: Dict[str, str] = {}  # session_id -> channel_id
+        self._anonymize_enabled: Dict[str, bool] = {}  # channel_id -> anonymize_pii flag
     
     def register(self, session_id: str, channel_id: str) -> None:
         """
@@ -109,6 +110,32 @@ class ChannelRegistry:
         
         return channel_id
     
+    def set_anonymize_enabled(self, channel_id: str, enabled: bool) -> None:
+        """Store the per-channel anonymization flag (from gateway header).
+
+        Missing entries mean "not configured" -> callers fall back to the
+        global settings.anonymization_enabled.
+        """
+        channel_id = self.validate_channel_id(channel_id)
+        self._anonymize_enabled[channel_id] = bool(enabled)
+        logger.debug(
+            f"Anonymize PII for channel '{channel_id}' set to {bool(enabled)}"
+        )
+
+    def get_anonymize_enabled(self, channel_id: str):
+        """
+        Get the per-channel anonymization flag.
+
+        Args:
+            channel_id: The channel ID
+
+        Returns:
+            True/False if the flag was set for this channel, or None if the
+            channel has never been flagged (caller falls back to global
+            settings.anonymization_enabled).
+        """
+        return self._anonymize_enabled.get(self.validate_channel_id(channel_id))
+
     def get_active_channels(self) -> Dict[str, int]:
         """
         Get statistics about active channels.

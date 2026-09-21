@@ -1,16 +1,54 @@
 services:
   onec-mcp-toolkit-proxy:
     build: .
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "6003:6003"
     environment:
       - PORT=6003
-      - TIMEOUT=180 # Timeout for waiting 1C response    
+      - TIMEOUT=180 # Timeout for waiting 1C response
       - ALLOW_DANGEROUS_WITH_APPROVAL=true  # Включить режим подтверждения опасных операций
       - RESPONSE_FORMAT=toon  # Формат ответов: toon (по умолчанию) или json
-      - ANONYMIZATION_ENABLED=false      
+      - ANONYMIZATION_ENABLED=false
       - ANONYMIZATION_RADICAL_MODE=false
       - ANONYMIZATION_NER_ENABLED=false
       - ANONYMIZATION_DICTIONARY_ENABLED=true
       - ANONYMIZATION_TOKENMAP_MAX=10000 # Soft cap on the token map size (per channel)
+      # --- Корпус для дообучения маскирования (см. README, раздел «Корпус») ---
+      - CORPUS_ENABLED=${CORPUS_ENABLED:-true}
+      - CORPUS_REDIS_URL=${CORPUS_REDIS_URL:-redis://redis:6379/2}
+      - CORPUS_DIR=${CORPUS_DIR:-/app/corpus}
+      - CORPUS_FLUSH_INTERVAL_SEC=${CORPUS_FLUSH_INTERVAL_SEC:-3600}
+      - CORPUS_MAX_RECORD_BYTES=${CORPUS_MAX_RECORD_BYTES:-1048576}
+      - CORPUS_REDIS_MAX_RECORDS=${CORPUS_REDIS_MAX_RECORDS:-100000}
+      - CORPUS_RETENTION_DAYS=${CORPUS_RETENTION_DAYS:-30}
+      - CORPUS_EXCLUDE_TOOLS=${CORPUS_EXCLUDE_TOOLS:-submit_for_deanonymization,get_screenshot}
+      - CORPUS_ADMIN_EMAIL=${CORPUS_ADMIN_EMAIL:-admin@toolkit.local}
+      - CORPUS_ADMIN_PASSWORD=${CORPUS_ADMIN_PASSWORD:-change-me-corpus-admin}
+      - CORPUS_ADMIN_SESSION_TTL=${CORPUS_ADMIN_SESSION_TTL:-43200}
+      - CORPUS_ADMIN_SESSION_SECRET=${CORPUS_ADMIN_SESSION_SECRET:-}
+    volumes:
+      - toolkit-corpus:/app/corpus
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Персистентность AOF: очередь корпуса переживает рестарт Redis.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  toolkit-corpus:

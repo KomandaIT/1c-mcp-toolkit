@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Корпус маскирования · 1C MCP Toolkit</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f6f8fb;
+    --text: #0f1730;
+    --text-2: rgba(15, 23, 48, 0.6);
+    --border: rgba(15, 23, 48, 0.12);
+    --border-strong: rgba(15, 23, 48, 0.24);
+    --accent: #00aeba;
+    --accent-hover: #008c99;
+    --accent-soft: rgba(0, 174, 186, 0.1);
+    --danger: #ee7521;
+    --danger-hover: #d3631a;
+    --danger-text: #b85711;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 2px 8px rgba(15, 23, 48, 0.08);
+    --font: 'Inter', 'HelveticaNeueCyr', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font); font-size: 14px; line-height: 1.55; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+  h1, h2, h3 { margin: 0; font-weight: 700; }
+
+  .site-head {
+    max-width: 1240px; margin: 0 auto; padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; color: var(--text); text-decoration: none; }
+  .brand:hover { text-decoration: none; }
+  .brand-bar {
+    display: flex; width: 140px; height: 4px;
+    border-radius: 999px; overflow: hidden; flex-shrink: 1;
+  }
+  .brand-bar span { flex: 1; }
+  .brand-bar span:nth-child(1) { background: #00aeba; }
+  .brand-bar span:nth-child(2) { background: #35ad69; }
+  .brand-bar span:nth-child(3) { background: #ee7521; }
+  .brand-bar span:nth-child(4) { background: #a4358b; }
+  .brand-sub { color: var(--text-2); font-weight: 500; font-size: 13px; }
+
+  .page { max-width: 1240px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  .page-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 28px;
+  }
+  .eyebrow {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--text-2); margin-bottom: 8px;
+  }
+  .eyebrow::before { content: ''; width: 16px; height: 2px; border-radius: 2px; background: var(--accent); }
+  .h-page { font-size: clamp(30px, 4vw, 42px); line-height: 1.08; letter-spacing: -0.01em; }
+  .h-section { font-size: 19px; margin-bottom: 14px; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge-busy { color: #0c7ba6; background: rgba(33, 181, 234, 0.16); }
+  .badge-ready { color: #1f7a45; background: rgba(53, 173, 105, 0.16); }
+  .badge-idle { color: rgba(15, 23, 48, 0.65); background: rgba(15, 23, 48, 0.08); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 9px 18px; border-radius: var(--radius-sm); border: 1px solid transparent;
+    font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap;
+    text-decoration: none; color: var(--text);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 1px 2px rgba(0, 174, 186, 0.35); }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-secondary { background: var(--surface); border-color: var(--border); color: var(--text); }
+  .btn-secondary:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2); }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
+  .btn-sm { padding: 5px 12px; font-size: 13px; }
+  .btn-gap { margin-left: 10px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 22px; margin-bottom: 20px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .card--lift:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--border-strong); }
+
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px; margin-bottom: 20px; }
+  .span-3 { grid-column: span 3; }
+  .grid .card { margin-bottom: 0; }
+  .card--kpi { display: flex; flex-direction: column; gap: 2px; padding: 20px 22px; }
+  .kpi-num { font-size: clamp(34px, 3.5vw, 50px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .kpi-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-2); }
+
+  .table-wrap { overflow-x: auto; }
+  .table { width: 100%; border-collapse: collapse; }
+  .table th {
+    text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--text-2); padding: 8px 12px;
+    border-bottom: 2px solid var(--border); white-space: nowrap;
+  }
+  .table td { padding: 12px; border-bottom: 1px solid var(--border); }
+  .table tbody tr:last-child td { border-bottom: none; }
+  .table tbody tr:hover td { background: var(--surface-2); }
+
+  .mono { font-family: var(--mono); }
+  .hint { color: var(--text-2); font-size: 13px; margin: 12px 0 0; }
+  .empty { color: var(--text-2); text-align: center; padding: 32px 0; }
+
+  .field-group + .field-group { margin-top: 14px; }
+  .field-label {
+    display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-2); margin-bottom: 8px;
+  }
+  .input {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); font: inherit; background: var(--surface);
+    color: var(--text); transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0, 174, 186, 0.22); }
+  .error-text { color: var(--danger-text); font-size: 13px; margin-top: 8px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  .pagination { display: flex; align-items: center; gap: 6px; padding: 14px 12px 2px; flex-wrap: wrap; }
+  .page-btn {
+    min-width: 32px; height: 32px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); color: var(--text); font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s, border-color 0.15s;
+  }
+  .page-btn:hover:not(:disabled) { background: var(--surface-2); }
+  .page-btn:disabled { opacity: 0.4; cursor: default; }
+  .page-info { margin-left: auto; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+
+  @media (max-width: 960px) {
+    .span-3 { grid-column: 1 / -1; }
+    .page-head { flex-direction: column; align-items: flex-start; }
+  }
+  @media (max-width: 720px) {
+    .site-head { padding: 14px 16px; }
+    .page { padding: 24px 16px 64px; }
+    .table th { display: none; }
+    .table, .table tbody { display: block; width: 100%; }
+    .table tr {
+      display: block; border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px 12px; margin-bottom: 10px; background: var(--surface);
+    }
+    .table td { display: block; border-bottom: 0; padding: 4px 0; }
+    .table td::before {
+      content: attr(data-label); display: block; font-size: 10.5px;
+      text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); margin-bottom: 2px;
+    }
+  }
+</style>
+</head>
+<body>
+<header class="site-head">
+  <div class="brand">
+    <span class="brand-bar" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+    <span>1C MCP Toolkit</span>
+    <span class="brand-sub">администрирование</span>
+  </div>
+  <div class="row" id="topbar" style="display:none">
+    <span class="badge badge-busy" id="stat-queue">Очередь: —</span>
+    <button class="btn btn-secondary" id="btn-logout">Выйти</button>
+  </div>
+</header>
+
+<main class="page">
+  <div class="page-head">
+    <div>
+      <div class="eyebrow">Администрирование</div>
+      <h1 class="h-page">Корпус маскирования</h1>
+    </div>
+    <div class="row" id="dash-actions" style="display:none">
+      <button class="btn btn-primary" id="btn-flush">Выгрузить сейчас</button>
+      <a class="btn btn-secondary" id="lnk-back" href="/admin/corpus">↻ Обновить</a>
+    </div>
+  </div>
+
+  <div id="login-box" class="card" style="max-width:420px">
+    <h2 class="h-section">Вход</h2>
+    <div class="field-group">
+      <label class="field-label" for="email">E-mail</label>
+      <input class="input" id="email" type="email" autocomplete="username">
+    </div>
+    <div class="field-group">
+      <label class="field-label" for="password">Пароль</label>
+      <input class="input" id="password" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" id="btn-login" style="margin-top:14px">Войти</button>
+    <div class="error-text" id="login-error"></div>
+  </div>
+
+  <div id="dash" style="display:none">
+    <div class="grid">
+      <div class="span-3">
+        <div class="card card--kpi card--lift">
+          <div class="kpi-num" id="kpi-enabled">—</div>
+          <div class="kpi-label">Сбор корпуса</div>
+        </div>
+      </div>
+      <div class="span-3">
+        <div class="card card--kpi card--lift">
+          <div class="kpi-num" id="kpi-pending">—</div>
+          <div class="kpi-label">В очереди Redis</div>
+        </div>
+      </div>
+      <div class="span-3">
+        <div class="card card--kpi card--lift">
+          <div class="kpi-num" id="kpi-files">—</div>
+          <div class="kpi-label">Файлов</div>
+        </div>
+      </div>
+      <div class="span-3">
+        <div class="card card--kpi card--lift">
+          <div class="kpi-num" id="kpi-retention">—</div>
+          <div class="kpi-label">Ретенция</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="h-section">Файлы JSONL</h2>
+      <div class="table-wrap" id="files"></div>
+      <div class="pagination" id="pager" style="display:none"></div>
+      <p class="hint">
+        Каталог: <span class="mono" id="stat-dir">—</span> · Файлы содержат данные из баз 1С
+        (raw — до анонимизации) — храните изолированно, не публикуйте и учитывайте
+        требования о ПДн.
+      </p>
+    </div>
+  </div>
+</main>
+
+<script>
+const CREDS_CONFIGURED = ("__CREDS_CONFIGURED__" === "true");
+const $ = (id) => document.getElementById(id);
+// База API: при прямом доступе (порт toolkit :6003) страница и API живут на
+// /admin/corpus; если reverse proxy публикует страницу по пути /toolkit/corpus,
+// API доступен по /toolkit/admin/* — определяем по location.pathname.
+const API_BASE = location.pathname.startsWith('/toolkit')
+  ? '/toolkit/admin/corpus'
+  : '/admin/corpus';
+// Кнопка «Обновить» ведёт на адрес самой страницы (а не на жёсткий путь).
+const PAGE_BASE = location.pathname.startsWith('/toolkit')
+  ? '/toolkit/corpus'
+  : '/admin/corpus';
+document.getElementById('lnk-back').href = PAGE_BASE;
+
+function fmtTime(ts) { return new Date(ts * 1000).toLocaleString('ru-RU'); }
+function fmtSize(b) { return (b / 1024).toFixed(1) + ' КБ'; }
+
+async function api(path, opts = {}) {
+  const r = await fetch(API_BASE + path, {
+    credentials: 'include',
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('json')) return { ok: r.ok, status: r.status, data: null };
+  const data = await r.json();
+  return { ok: r.ok, status: r.status, data };
+}
+
+let current_page = 1;
+
+async function load() {
+  const res = await api('/files?page=' + current_page);
+  if (res.status === 401) { showLogin(); return; }
+  if (!res.ok || !res.data) {
+    showLogin();
+    $('login-error').textContent = 'Не удалось загрузить данные (' + res.status + ')';
+    return;
+  }
+  const d = res.data;
+  $('kpi-enabled').textContent = d.enabled ? 'вкл' : 'выкл';
+  $('kpi-pending').textContent = d.pending === null ? '—' : d.pending;
+  $('kpi-files').textContent = String(d.files.total);
+  $('kpi-retention').textContent = d.retention_days + ' дн.';
+  $('stat-dir').textContent = d.corpus_dir;
+  renderFiles(d.files);
+  $('dash').style.display = '';
+  $('dash-actions').style.display = '';
+  $('login-box').style.display = 'none';
+  $('topbar').style.display = '';
+}
+
+function renderFiles(f) {
+  if (!f.items.length) {
+    $('files').innerHTML = '<div class="empty">Файлов пока нет.</div>';
+    $('pager').style.display = 'none';
+    return;
+  }
+  let rows = '<table class="table"><thead><tr><th>Файл</th><th>Записей</th><th>Размер</th><th>Обновлён</th><th></th></tr></thead><tbody>';
+  for (const file of f.items) {
+    rows += '<tr>'
+      + '<td class="mono" data-label="Файл">' + file.name + '</td>'
+      + '<td data-label="Записей">' + file.records + '</td>'
+      + '<td data-label="Размер">' + fmtSize(file.size) + '</td>'
+      + '<td class="mono" data-label="Обновлён">' + fmtTime(file.mtime) + '</td>'
+      + '<td data-label="Действия">'
+      + '<a class="btn btn-secondary btn-sm" href="' + API_BASE + '/file/' + file.name + '" download>скачать</a>'
+      + '<button class="btn btn-danger btn-sm btn-gap" data-del="' + file.name + '">удалить</button>'
+      + '</td></tr>';
+  }
+  rows += '</tbody></table>';
+  $('files').innerHTML = rows;
+  $('pager').style.display = '';
+  $('pager').innerHTML =
+    '<button class="page-btn" id="pg-prev"' + (f.page <= 1 ? ' disabled' : '') + '>‹</button>'
+    + '<button class="page-btn" id="pg-next"' + (f.page >= f.last ? ' disabled' : '') + '>›</button>'
+    + '<span class="page-info">Стр. ' + f.page + ' из ' + f.last + ' · всего ' + f.total + '</span>';
+  const prev = $('pg-prev'), next = $('pg-next');
+  if (prev) prev.onclick = () => { current_page = f.page - 1; load(); };
+  if (next) next.onclick = () => { current_page = f.page + 1; load(); };
+  document.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = () => del(b.dataset.del);
+  });
+}
+
+async function del(name) {
+  if (!confirm('Удалить файл ' + name + ' без возможности восстановления?')) return;
+  const res = await api('/file/' + name, { method: 'DELETE' });
+  if (res.ok) load(); else alert(res.data?.error || 'Ошибка удаления');
+}
+
+async function flush() {
+  const b = $('btn-flush');
+  b.disabled = true; b.textContent = 'Выгрузка…';
+  try {
+    const res = await api('/flush', { method: 'POST' });
+    if (!res.ok) { alert(res.data?.error || 'Ошибка выгрузки'); return; }
+    alert('Выгружено записей: ' + res.data.written);
+    load();
+  } finally { b.disabled = false; b.textContent = 'Выгрузить сейчас'; }
+}
+
+async function doLogin() {
+  $('login-error').textContent = '';
+  const res = await api('/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: $('email').value, password: $('password').value }),
+  });
+  if (res.ok) {
+    current_page = 1;
+    load();
+  } else {
+    $('login-error').textContent = (res.data && res.data.error) || 'Ошибка входа (' + res.status + ')';
+  }
+}
+
+function showLogin() {
+  $('login-box').style.display = '';
+  $('dash').style.display = 'none';
+  $('dash-actions').style.display = 'none';
+  $('topbar').style.display = 'none';
+  if (!CREDS_CONFIGURED) {
+    $('login-error').textContent =
+      'Доступ не настроен: задайте CORPUS_ADMIN_EMAIL и CORPUS_ADMIN_PASSWORD в окружении toolkit.';
+    $('btn-login').disabled = true;
+  }
+}
+
+$('btn-login').onclick = doLogin;
+$('btn-flush').onclick = flush;
+$('btn-logout').onclick = async () => {
+  await api('/logout', { method: 'POST' });
+  showLogin();
+};
+
+// старт: пробуем загрузить дашборд; 401/фейл → экран логина (он видим по умолчанию)
+window.addEventListener('DOMContentLoaded', () => {
+  if (CREDS_CONFIGURED) load();
+  else showLogin();
+});
+</script>
+</body>
+</html>

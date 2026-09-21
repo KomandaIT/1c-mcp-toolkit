@@ -19,6 +19,7 @@ from .channel_registry import channel_registry, ChannelRegistry, DEFAULT_CHANNEL
 logger = logging.getLogger(__name__)
 
 MCP_SESSION_ID_HEADER = "mcp-session-id"
+ANONYMIZE_PII_HEADER = "x-anonymize-pii"
 
 
 class ChannelMiddleware:
@@ -67,7 +68,18 @@ class ChannelMiddleware:
         
         # Save effective channel in scope for access in handlers
         scope["channel"] = effective_channel
-        
+
+        # Per-channel anonymization flag (set by the gateway). Expose per
+        # request in scope AND persist in the registry keyed by channel, so
+        # handlers without request context (command executor) can read it.
+        # Absent header -> keep previously stored value (fallback stays on
+        # the global settings.anonymization_enabled).
+        anonymize_raw = request.headers.get(ANONYMIZE_PII_HEADER)
+        if anonymize_raw is not None:
+            anonymize_pii = anonymize_raw.strip().lower() in ("on", "true", "1", "yes")
+            scope["anonymize_pii"] = anonymize_pii
+            channel_registry.set_anonymize_enabled(effective_channel, anonymize_pii)
+
         # Flag: this is a new session (no session_id in request)
         is_new_session = request_session_id is None
         

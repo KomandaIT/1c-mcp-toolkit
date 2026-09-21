@@ -70,29 +70,22 @@ class Settings:
             "ANONYMIZATION_INCLUDE_ERRORS", "true"
         ).lower() in ("true", "1", "yes")
 
-        # Global NER toggle — set to true to enable SpaCy NER everywhere.
+        # Global NER toggle — set to true to enable Natasha NER everywhere.
         self.anonymization_ner_enabled: bool = os.getenv(
             "ANONYMIZATION_NER_ENABLED", "false"
         ).lower() in ("true", "1", "yes")
 
-        # Allow SpaCy NER inside execute_code result payloads (data subtree).
+        # Allow Natasha NER inside execute_code result payloads (data subtree).
         self.anonymization_ner_for_execute_code_result: bool = os.getenv(
             "ANONYMIZATION_NER_FOR_EXECUTE_CODE_RESULT",
             "false",
         ).lower() in ("true", "1", "yes")
 
-        # Allow SpaCy NER for top-level error messages of any tool.
+        # Allow Natasha NER for top-level error messages of any tool.
         self.anonymization_ner_for_error: bool = os.getenv(
             "ANONYMIZATION_NER_FOR_ERROR",
             "false",
         ).lower() in ("true", "1", "yes")
-
-        # SpaCy NER model name (used if SpaCy is installed in the runtime image).
-        # Default: md model (sm is not bundled in the image).
-        self.anonymization_spacy_model: str = (
-            os.getenv("ANONYMIZATION_SPACY_MODEL", "ru_core_news_md").strip().lower()
-            or "ru_core_news_md"
-        )
 
         # Overridable key lists — if set, fully replace defaults
         self.anonymization_skip_value_key_prefixes: Optional[Tuple[str, ...]] = \
@@ -130,10 +123,78 @@ class Settings:
         self.anonymization_dictionary_apply_key_substrings_add: Optional[Tuple[str, ...]] = \
             self._parse_csv_tuple("ANONYMIZATION_DICTIONARY_APPLY_KEY_SUBSTRINGS_ADD")
 
+        # Max rows fetched per dictionary source during preload. Full-table fetches
+        # (millions of rows) freeze the 1C client; substring masking does not need
+        # the complete catalog.
+        self.anonymization_dictionary_preload_limit: int = self._parse_int(
+            "ANONYMIZATION_DICTIONARY_PRELOAD_LIMIT", 50000
+        )
+
+        # Disk cache of dictionary terms per channel. Avoids re-fetching catalogs
+        # from 1C on every proxy restart; stale-while-revalidate semantics.
+        self.anonymization_dictionary_cache_enabled: bool = os.getenv(
+            "ANONYMIZATION_DICTIONARY_CACHE_ENABLED", "true"
+        ).lower() in ("true", "1", "yes")
+        # TTL in seconds (default 4h). 0 = cache never expires by age.
+        self.anonymization_dictionary_cache_ttl: int = self._parse_int(
+            "ANONYMIZATION_DICTIONARY_CACHE_TTL", 14400
+        )
+        # Cache directory. Relative paths resolve against this package directory.
+        self.anonymization_dictionary_cache_dir: str = os.getenv(
+            "ANONYMIZATION_DICTIONARY_CACHE_DIR", ".dict_cache"
+        )
+
         # Soft cap on the token map size (per channel). Eviction happens at the
         # request boundary (see TokenMapper.prune). 0 = unlimited (opt-out).
         self.anonymization_tokenmap_max: int = self._parse_int(
             "ANONYMIZATION_TOKENMAP_MAX", 10000
+        )
+
+        # --- Corpus: raw answers of 1C tools for masking retraining ---
+        # Capture point: mcp_handler._execute_1c_command (raw + anonymized).
+        # Default OFF: standalone toolkit deployments must not start storing
+        # raw personal data silently.
+        self.corpus_enabled: bool = os.getenv(
+            "CORPUS_ENABLED", "false"
+        ).lower() in ("true", "1", "yes")
+        # Redis for the pending queue (survives toolkit restarts).
+        self.corpus_redis_url: str = os.getenv("CORPUS_REDIS_URL", "redis://redis:6379/2")
+        self.corpus_dir: str = os.getenv("CORPUS_DIR", "/app/corpus")
+        self.corpus_flush_interval_sec: int = self._parse_int(
+            "CORPUS_FLUSH_INTERVAL_SEC", 3600
+        )
+        self.corpus_max_record_bytes: int = self._parse_int(
+            "CORPUS_MAX_RECORD_BYTES", 1_048_576  # 1 MiB, как в compose/.env.example
+        )
+        self.corpus_redis_max_records: int = self._parse_int(
+            "CORPUS_REDIS_MAX_RECORDS", 100_000
+        )
+        self.corpus_retention_days: int = self._parse_int(
+            "CORPUS_RETENTION_DAYS", 30
+        )
+        # Constant exclusions (comma-separated tool names).
+        self.corpus_exclude_tools_set = frozenset(
+            t.strip().lower()
+            for t in os.getenv(
+                "CORPUS_EXCLUDE_TOOLS",
+                "submit_for_deanonymization,get_screenshot",
+            ).split(",")
+            if t.strip()
+        )
+
+        # --- Corpus admin UI auth (/admin/corpus): login from env ---
+        # Both must be set for the UI login to be enabled; otherwise the page
+        # reports "access not configured" and never accepts credentials.
+        self.corpus_admin_email: str = os.getenv("CORPUS_ADMIN_EMAIL", "").strip()
+        self.corpus_admin_password: str = os.getenv("CORPUS_ADMIN_PASSWORD", "")
+        # Session TTL for the signed admin cookie, seconds (12h default).
+        self.corpus_admin_session_ttl: int = self._parse_int(
+            "CORPUS_ADMIN_SESSION_TTL", 43200
+        )
+        # Secret used to sign session cookies. If empty, a random per-process
+        # key is generated (means every toolkit restart logs users out).
+        self.corpus_admin_session_secret: str = os.getenv(
+            "CORPUS_ADMIN_SESSION_SECRET", ""
         )
 
     @staticmethod

@@ -25,6 +25,8 @@ from mcp.types import ImageContent, TextContent
 from pydantic import Field, ValidationError
 
 from .command_queue import channel_command_queue
+from .channel_registry import channel_registry
+from . import corpus
 from .config import settings
 from .anonymizer import AnonymizerRegistry
 from .response_formatter import format_tool_result, is_toon_available
@@ -299,6 +301,20 @@ mcp = FastMCP(
 )
 
 
+def _channel_anonymization_enabled(channel: str) -> bool:
+    """Per-channel effective anonymization flag.
+
+    External gateways may carry a per-channel flag in the X-Anonymize-Pii
+    header (ChannelMiddleware stores it in the registry). Channels without
+    a stored flag fall back to the global settings.anonymization_enabled
+    (standalone toolkit usage unchanged).
+    """
+    per_channel = channel_registry.get_anonymize_enabled(channel)
+    if per_channel is None:
+        return settings.anonymization_enabled
+    return per_channel
+
+
 async def _execute_1c_command(tool: str, params: Dict[str, Any], channel: str = "default", timeout: Optional[float] = None) -> Dict[str, Any]:
     """
     Execute a command on the 1C client and wait for the result.
@@ -330,9 +346,10 @@ async def _execute_1c_command(tool: str, params: Dict[str, Any], channel: str = 
             "1C processing might be disconnected or slow."
         )
     
-    # Determine if anonymization should be applied for this tool
+    # Determine if anonymization should be applied for this tool (per-channel
+    # flag from the gateway; global switch is the fallback) + tool whitelist
     _do_anon = (
-        settings.anonymization_enabled
+        _channel_anonymization_enabled(channel)
         and tool in settings.anonymization_tools
     )
     requested_schema = bool(params.get("include_schema", False)) if tool == "execute_query" else False
@@ -367,8 +384,22 @@ async def _execute_1c_command(tool: str, params: Dict[str, Any], channel: str = 
         )
         logger.info(f"Command {command_id} completed successfully on channel '{channel}'")
 
-        # Anonymize response before formatting
-        if _do_anon:
+        # Corpus capture: raw result, taken BEFORE anonymization;
+        # the anonymized duplicate is recorded when anonymization applied.
+        # Fail-open: corpus errors never break tool responses.
+        if corpus.is_tool_recordable(tool):
+            raw_snapshot = result
+            if _do_anon:
+                result = anon.anonymize_response(result, tool_name=tool)
+                asyncio.ensure_future(corpus.add_record(corpus.build_record(
+                    tool=tool, channel=channel, raw_result=raw_snapshot,
+                    anonymized_result=result,
+                )))
+            else:
+                asyncio.ensure_future(corpus.add_record(corpus.build_record(
+                    tool=tool, channel=channel, raw_result=raw_snapshot,
+                )))
+        elif _do_anon:
             result = anon.anonymize_response(result, tool_name=tool)
 
         if _do_anon and tool == "execute_query" and not requested_schema and isinstance(result, dict):
@@ -1541,41 +1572,50 @@ async def close_1c_session(ctx: Context) -> Dict[str, Any]:
     return result
 
 
-if settings.anonymization_enabled:
-    @mcp.tool()
-    async def submit_for_deanonymization(ctx: Context, text: str) -> Dict[str, Any]:
-        """
-        Submit the final user-facing response for de-anonymization display.
+@mcp.tool()
+async def submit_for_deanonymization(ctx: Context, text: str) -> Dict[str, Any]:
+    """
+    Submit the final user-facing response for de-anonymization display.
 
-        You MUST call this tool if, and only if, your final response to the user contains
-        anonymization tokens in the form [CATEGORY-NNNNN], for example [ORG-00001],
-        [PER-00042], [INN-00001].
+    You MUST call this tool if, and only if, your final response to the user contains
+    anonymization tokens in the form [CATEGORY-NNNNN], for example [ORG-00001],
+    [PER-00042], [INN-00001].
 
-        Call this tool exactly once, immediately before sending the final response to the user.
-        Pass the complete final response text in the "text" parameter.
-        Do NOT call this tool for intermediate reasoning, drafts, or raw tool outputs.
+    Call this tool exactly once, immediately before sending the final response to the user.
+    Pass the complete final response text in the "text" parameter.
+    Do NOT call this tool for intermediate reasoning, drafts, or raw tool outputs.
 
-        This tool does NOT return de-anonymized text to you.
-        It only confirms receipt, for example {"received": true}.
-        After calling this tool, send your original final response with tokens unchanged.
-        The user will see the de-anonymized version in their interface.
-        """
-        channel = _get_channel_from_context(ctx)
-        result = await _execute_1c_command("submit_for_deanonymization", {"text": text}, channel=channel)
-        return result
+    This tool does NOT return de-anonymized text to you.
+    It only confirms receipt, for example {"received": true}.
+    After calling this tool, send your original final response with tokens unchanged.
+    The user will see the de-anonymized version in their interface.
+    """
+    channel = _get_channel_from_context(ctx)
+    # Registered unconditionally so that the gateway-side tools/list filtering
+    # stays the single source of truth; per-channel gate here mirrors REST.
+    if not _channel_anonymization_enabled(channel):
+        logger.info(f"submit_for_deanonymization denied on channel '{channel}': anonymization disabled")
+        return {
+            "success": False,
+            "error": "Tool is not available: anonymization is disabled on this connection",
+        }
+    result = await _execute_1c_command("submit_for_deanonymization", {"text": text}, channel=channel)
+    return result
 
 
 def _apply_anonymization_notice_to_tools() -> None:
     if not settings.anonymization_enabled:
         return
     notice = (
-        "\n\nNOTE: Anonymization is enabled for this tool. "
-        "Some returned values (person names, organization names, TINs, and other "
+        "\n\nNOTE: Anonymization may be enabled for this tool depending on the connection. "
+        "When enabled, some returned values (person names, organization names, TINs, and other "
         "personal data) are replaced with anonymous tokens in the format "
         "[CATEGORY-NNNNN] (e.g. [ORG-00001], [PER-00042], [INN-00001]). "
         "Tokens are stable within the current session. "
         "Do not attempt to interpret these tokens as meaningful data. "
-        "Tokens can be passed as query parameters in subsequent requests."
+        "Tokens can be passed as query parameters in subsequent requests "
+        "and submitted via submit_for_deanonymization. "
+        "If tool outputs contain no tokens, no replacement was performed."
     )
     for tool in mcp._tool_manager.list_tools():
         if tool.name in settings.anonymization_tools:

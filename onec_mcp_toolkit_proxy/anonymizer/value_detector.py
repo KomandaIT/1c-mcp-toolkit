@@ -4,12 +4,13 @@ Multi-level sensitive data detection for anonymization.
 Detection priority:
   Level 0: Key-aware (SENSITIVE_KEY_SUBSTRINGS + NON_SENSITIVE_KEY_SUBSTRINGS dual filter)
   Level 1: Regex patterns (full match for values, search for inline)
-  Level 2: SpaCy NER (optional, graceful degradation)
+  Level 2: Natasha NER (optional, graceful degradation)
   Level 3: Radical mode fallback (tokenize everything)
 """
 import re
 import json
 import logging
+import threading
 from typing import Dict, Optional, Sequence
 
 from ..config import settings
@@ -370,33 +371,85 @@ SEARCH_PATTERNS = [
 
 
 # ---------------------------------------------------------------------------
-# SpaCy NER (Level 2, optional)
+# Natasha NER (Level 2, optional)
 # ---------------------------------------------------------------------------
 
-class NERDetector:
-    """Optional SpaCy-based NER. Degrades gracefully if spacy not installed."""
-    _NER_MAP = {"PER": "PER", "ORG": "ORG", "LOC": "LOC"}
+class _SharedNER:
+    """Lazily loaded, process-wide shared Natasha NER tagger.
 
-    def __init__(self):
-        self._nlp = None
-        model_name = getattr(settings, "anonymization_spacy_model", "ru_core_news_md")
-        try:
-            import spacy
-            self._nlp = spacy.load(model_name)
-            logger.info(f"SpaCy NER loaded ({model_name})")
-        except (ImportError, OSError):
-            logger.info("SpaCy not available, NER detection disabled")
+    Loading NewsNERTagger(NewsEmbedding()) is expensive (~50 MB, seconds),
+    so the model is created once on first real NER use and shared across
+    all ValueDetector/Anonymizer instances (per-channel registry included).
+    """
+
+    _lock = threading.Lock()
+    _segmenter = None
+    _ner_tagger = None
+    _load_failed = False
+
+    @classmethod
+    def get(cls):
+        """Return (segmenter, ner_tagger) or (None, None) if unavailable."""
+        if cls._load_failed:
+            return None, None
+        if cls._ner_tagger is None:
+            with cls._lock:
+                if cls._ner_tagger is None and not cls._load_failed:
+                    try:
+                        from natasha import NewsEmbedding, NewsNERTagger, Segmenter
+                        cls._segmenter = Segmenter()
+                        cls._ner_tagger = NewsNERTagger(NewsEmbedding())
+                        logger.info("Natasha NER loaded")
+                    except Exception as e:
+                        cls._load_failed = True
+                        logger.info(f"Natasha not available, NER detection disabled: {e}")
+        return cls._segmenter, cls._ner_tagger
+
+
+class NERDetector:
+    """
+    NER-детектор на базе Natasha.
+    """
+
+    _NER_MAP = {
+        "PER": "PER",
+        "ORG": "ORG",
+        "LOC": "LOC",
+    }
+
+    def __init__(self) -> None:
+        self._segmenter, self._ner_tagger = _SharedNER.get()
+
+    @property
+    def available(self) -> bool:
+        """True if the shared Natasha NER tagger is loaded."""
+        return self._ner_tagger is not None
+
+    def get_entities(self, value: str):
+        if not self.available or not value or len(value) < 4:
+            return []
+
+        from natasha import Doc
+
+        doc = Doc(value)
+        doc.segment(self._segmenter)
+        doc.tag_ner(self._ner_tagger)
+
+        return doc.spans
 
     def detect(self, value: str) -> Optional[str]:
-        """Detect NER category for whole-string match (>50% coverage)."""
-        if not self._nlp or len(value) < 4:
-            return None
-        doc = self._nlp(value)
-        for ent in doc.ents:
-            if len(ent.text) / len(value) > 0.5:
-                return self._NER_MAP.get(ent.label_)
-        return None
 
+        for span in self.get_entities(value):
+            category = self._NER_MAP.get(span.type)
+
+            if category is None:
+                continue
+
+            span_text = value[span.start:span.stop]
+            if len(span_text) / len(value) > 0.5:
+                return category
+
+        return None
 
 # ---------------------------------------------------------------------------
 # Whitelist — what to skip
@@ -594,38 +647,45 @@ class ValueDetector:
                 pattern,
                 lambda m, cat=category: inline_tokenize(m.group(0), cat),
             )
-        # 2. NER — catches PER/ORG/LOC in free text (if SpaCy available)
-        if allow_ner and self._ner._nlp:
+        # 2. NER — catches PER/ORG/LOC in free text (if Natasha available)
+        if allow_ner and self._ner.available:
             key = (parent_key or "").lower()
-            doc = self._ner._nlp(value)
-            for ent in reversed(doc.ents):  # reversed to preserve indices
-                cat = self._ner._NER_MAP.get(ent.label_)
+
+            entities = self._ner.get_entities(value)
+            for ent in reversed(entities):
+                cat = self._ner._NER_MAP.get(ent.type)
+
                 if not cat:
                     continue
-                if not ent.text or ent.text.startswith("["):
+
+                ent_text = value[ent.start:ent.stop]
+                if not ent_text or ent_text.startswith("["):
                     continue
 
-                if _overlaps_any_token(value, ent.start_char, ent.end_char):
+                if _overlaps_any_token(value, ent.start, ent.stop):
                     continue
 
                 if key == "error":
-                    # Do not allow NER to "anonymize" 1C query/metadata identifiers
-                    # in error messages (e.g. ЮридическийАдрес, Справочник.Организации,
-                    # ВнешняяОбработка.MCPToolkit.Форма...).
-                    ent_lower = ent.text.lower()
+                    ent_lower = ent_text.lower()
+
                     if any(s in ent_lower for s in _NER_ERROR_STOPWORD_SUBSTRINGS):
                         continue
-                    if _1C_METADATA_PREFIX_RE.match(ent.text):
-                        continue
-                    if "." in ent.text and " " not in ent.text:
-                        continue
-                    if _is_dotted_identifier_context(value, ent.start_char, ent.end_char):
-                        continue
-                    if _looks_like_1c_identifier_fragment(ent.text):
+
+                    if _1C_METADATA_PREFIX_RE.match(ent_text):
                         continue
 
-                token = inline_tokenize(ent.text, cat)
-                value = value[:ent.start_char] + token + value[ent.end_char:]
+                    if "." in ent_text and " " not in ent_text:
+                        continue
+
+                    if _is_dotted_identifier_context(value, ent.start, ent.stop):
+                        continue
+
+                    if _looks_like_1c_identifier_fragment(ent_text):
+                        continue
+
+                token = inline_tokenize(ent_text, cat)
+
+                value = value[:ent.start] + token + value[ent.stop:]
 
         # 3. Bank cards (PAN): 13–19 digits with optional spaces/dashes + Luhn check
         def _replace_card(m: re.Match) -> str:

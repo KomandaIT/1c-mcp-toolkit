@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.ruff_cache/
 *.py[cod]
 *$py.class
 *.so
@@ -53,6 +54,9 @@ logs/
 .env
 .env.local
 .env.*.local
+
+# Corpus data (raw 1C answers, contains personal data)
+corpus/
 
 # Docker
 *.pid

@@ -129,18 +129,25 @@ HTTP-сервер запускается **прямо внутри обрабо�
 
 #### Вариант 1: Развёртывание в Docker (режим Прокси)
 
+Самодостаточный стек: прокси + Redis (очередь корпуса). Все настройки — в `.env` (копия [.env.example](./.env.example); без файла используются дефолты).
+
 ```bash
 # Клонировать репозиторий
 git clone <repository-url>
 cd 1c-mcp-toolkit
 
-# Собрать и запустить через Docker Compose
-docker-compose up -d
+# (опционально) скопировать настройки
+cp .env.example .env
 
-# Или собрать и запустить вручную
+# Собрать и запустить через Docker Compose
+docker compose up -d
+
+# Или собрать и запустить вручную (прокси без Redis — корпус в fail-open)
 docker build -t onec-mcp-toolkit-proxy .
 docker run -d -p 6003:6003 --name onec-mcp-toolkit-proxy onec-mcp-toolkit-proxy
 ```
+
+> **Примечание о сборке:** в Dockerfile зафиксирован пин `mcp>=1.0,<2` — свежая сборка с открытым `mcp>=1.0.0` тянет mcp 2.x, где `FastMCP` переименован в `MCPServer`, и код падает на импорте.
 
 #### Вариант 2: Прямой запуск Python (режим Прокси)
 
@@ -159,6 +166,8 @@ python -m onec_mcp_toolkit_proxy
 ```
 
 Сервер запустится на `http://localhost:6003` по умолчанию.
+
+> **Примечание:** Redis нужен только для корпуса (очередь записей). Без Redis корпус работает в fail-open режиме — записи пропускаются с warning, ответы инструментов не ломаются.
 
 <a id="startup-command-line"></a>
 
@@ -2054,6 +2063,26 @@ HEALTH_INCLUDE_CHANNEL_DETAILS=true
 | `ALLOW_DANGEROUS_WITH_APPROVAL` | `false` | Режим подтверждения опасных операций (пользователь может разрешить/отклонить в 1С) |
 | `RESPONSE_FORMAT` | `toon` | Формат ответов инструментов: `toon` (по умолчанию, компактный формат) или `json` (максимальная совместимость) |
 | `ENABLE_ENCODING_AUTO_DETECTION` | `true` | Автоопределение кодировки для не-UTF-8 запросов (помогает Windows-клиентам с CP1251/CP866) |
+| `ANONYMIZATION_TOKENMAP_MAX` | `10000` | Soft cap карты токенов на канал (вытеснение на границе запроса; 0 = без ограничения) |
+
+**Анонимизация:** все переменные `ANONYMIZATION_*` (включение, словарь, кэш, NER, чувствительные ключи) — см. [ANONYMIZATION.md](./ANONYMIZATION.md). Полный список всех переменных с комментариями — в [.env.example](./.env.example).
+
+**Корпус для дообучения маскирования** (подробное описание — в разделе «Корпус» ниже):
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `CORPUS_ENABLED` | `false` (в compose — `true`) | Включить сборку корпуса |
+| `CORPUS_REDIS_URL` | `redis://redis:6379/2` | Redis-очередь записей (`corpus:pending`) |
+| `CORPUS_DIR` | `/app/corpus` | Каталог JSONL-файлов (права 0700, volume) |
+| `CORPUS_FLUSH_INTERVAL_SEC` | `3600` | Период flush Redis → JSONL |
+| `CORPUS_MAX_RECORD_BYTES` | `1048576` | Лимит размера записи (байты, свыше — обрезка с `truncated: true`) |
+| `CORPUS_REDIS_MAX_RECORDS` | `100000` | Потолок очереди (свыше — пропуск с warning) |
+| `CORPUS_RETENTION_DAYS` | `30` | Ретеншн: удаление JSONL-файлов старше N дней |
+| `CORPUS_EXCLUDE_TOOLS` | `submit_for_deanonymization,get_screenshot` | Инструменты, никогда не попадающие в корпус |
+| `CORPUS_ADMIN_EMAIL` | пусто (в compose — `admin@toolkit.local`) | Логин admin UI корпуса; пусто = доступ не настроен |
+| `CORPUS_ADMIN_PASSWORD` | пусто (в compose — `change-me-corpus-admin`) | Пароль admin UI корпуса |
+| `CORPUS_ADMIN_SESSION_TTL` | `43200` | TTL session-cookie admin UI, сек (12ч) |
+| `CORPUS_ADMIN_SESSION_SECRET` | пусто | Секрет подписи cookie (пусто — эфемерный ключ, рестарт разлогинивает) |
 
 **Настройка RESPONSE_FORMAT:**
 - `toon` (по умолчанию): Формат TOON (Token-Oriented Object Notation), экономия 30-60% токенов для LLM-контекстов
@@ -2080,25 +2109,54 @@ TOON — компактный формат сериализации, оптим�
 Удалить,Delete,Записать,Write,УстановитьПривилегированныйРежим,SetPrivilegedMode,ПодключитьВнешнююКомпоненту,AttachAddIn,УстановитьВнешнююКомпоненту,InstallAddIn,COMОбъект,COMObject,УстановитьМонопольныйРежим,SetExclusiveMode,УдалитьФайлы,DeleteFiles,КопироватьФайл,CopyFile,ПереместитьФайл,MoveFile,СоздатьКаталог,CreateDirectory
 ```
 
-**Пример docker-compose.yml с пользовательскими настройками:**
+**Актуальный docker-compose.yml (самодостаточный стек):**
+
 ```yaml
-version: '3.8'
 services:
   onec-mcp-toolkit-proxy:
     build: .
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "6003:6003"
     environment:
       - PORT=6003
       - TIMEOUT=180
-      - POLL_TIMEOUT=0
-      - LOG_LEVEL=DEBUG
-      - DEBUG=false
-      - DANGEROUS_KEYWORDS=Удалить,Delete,УдалитьФайлы,DeleteFiles
-      - ALLOW_DANGEROUS_WITH_APPROVAL=true  # Включить подтверждение опасных операций
-      - RESPONSE_FORMAT=toon  # Формат ответов: toon (по умолчанию) или json
+      - ALLOW_DANGEROUS_WITH_APPROVAL=true
+      - RESPONSE_FORMAT=toon
+      - ANONYMIZATION_ENABLED=false
+      - ANONYMIZATION_DICTIONARY_ENABLED=true
+      - ANONYMIZATION_TOKENMAP_MAX=10000
+      - CORPUS_ENABLED=${CORPUS_ENABLED:-true}
+      - CORPUS_REDIS_URL=${CORPUS_REDIS_URL:-redis://redis:6379/2}
+      - CORPUS_DIR=${CORPUS_DIR:-/app/corpus}
+      # ... остальные CORPUS_* — см. docker-compose.yml и .env.example
+    volumes:
+      - toolkit-corpus:/app/corpus
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  toolkit-corpus:
 ```
+
+> Пользовательские значения удобнее задавать в `.env` (см. [.env.example](./.env.example)), а не править compose-файл.
 
 ### Настройка клиента 1С
 
@@ -2170,11 +2228,56 @@ services:
 
 **Режим «Прокси»:**
 - Управляется переменными окружения: `ANONYMIZATION_ENABLED=true`
-- Анализ имён полей, словарь, регулярные выражения, опциональный SpaCy NER
+- Анализ имён полей, словарь, регулярные выражения, опциональный Natasha NER
 - Умная анонимизация псевдонимов колонок через схему запроса
 - Изоляция токенов по каналам
 
 Полная документация по настройке и возможностям: **[ANONYMIZATION.md](./ANONYMIZATION.md)**
+
+**Взаимодействие с корпусом:** при включённом корпусе raw-ответ инструмента снимается **до** анонимизации, поэтому в JSONL попадает пара `raw_result_text` + `anonymized_result_text` (`anonymization_applied: true`) — готовые обучающие примеры «до/после» для дообучения маскирования. Выключатели независимы: корпус можно собирать без анонимизации и наоборот.
+
+### Корпус для дообучения маскирования
+
+Прокси может собирать **raw-ответы инструментов 1С** (до анонимизации, без аргументов запросов) в JSONL-файлы — датасет для дообучения/калибровки моделей маскирования ПДн. Захват выполняется в единственной точке исполнения команды 1С (`mcp_handler._execute_1c_command`), поэтому в записи попадают и исходный, и (при включённой анонимизации) токенизированный вариант ответа.
+
+**Формат записи JSONL:**
+
+```json
+{"ts": 1760000000.0, "tool": "execute_query", "channel": "c1",
+ "anonymization_applied": true,
+ "raw_result_text": "...",
+ "anonymized_result_text": "..."}
+```
+
+**Пайплайн:**
+
+1. Захват ответа → `RPUSH corpus:pending` (Redis; очередь переживает рестарты прокси)
+2. Фоновый воркер прокси раз в `CORPUS_FLUSH_INTERVAL_SEC`: `LRANGE` батчем → append в `CORPUS_DIR/corpus-YYYY-MM-DD.jsonl` (день по ts записи, UTC) → `LTRIM`
+3. Ретеншн: файлы старше `CORPUS_RETENTION_DAYS` удаляются
+
+Файлы создаются по дням: `CORPUS_DIR/corpus-YYYY-MM-DD.jsonl`.
+
+**Включение:**
+
+```bash
+cp .env.example .env   # CORPUS_ENABLED=true уже стоит по умолчанию
+docker compose up -d   # поднимает прокси + Redis (очередь корпуса)
+```
+
+**Fail-open:** Redis недоступен → записи пропускаются с warning, ответы инструментов не ломаются. `CORPUS_ENABLED=false` → записей нет. В standalone-деплоях без compose корпус по умолчанию выключен (`CORPUS_ENABLED=false`) — raw персональные данные не должны копиться молча.
+
+**⚠️ Приватность:**
+
+- Raw-ответы содержат персональные данные; аргументы запросов не записываются (только ответы)
+- Каталог корпуса — права 0700, volume, наружу не публикуется
+- Инструменты `submit_for_deanonymization` и `get_screenshot` (base64-скриншоты) никогда не записываются — `CORPUS_EXCLUDE_TOOLS` (расширяемый список)
+- Записи свыше `CORPUS_MAX_RECORD_BYTES` обрезаются (`truncated: true`)
+- Ошибки инструментов (JSON-RPC `error`) в корпус не попадают
+- Ретеншн по умолчанию 30 дней — корпус без «истории навсегда»
+
+**Admin UI:** `http://<host>:6003/admin/corpus` — просмотр файлов, счётчик очереди, ручной flush, скачивание/удаление JSONL. Вход по email+паролю из `CORPUS_ADMIN_EMAIL`/`CORPUS_ADMIN_PASSWORD` (проверка через `hmac.compare_digest`; успех → подписанный HMAC session-cookie `HttpOnly, SameSite=Lax`, TTL `CORPUS_ADMIN_SESSION_TTL`, rate-limit попыток логина). Оба значения пустые = доступ не настроен, логин отклоняется.
+
+**Переменные окружения** — полная таблица в разделе «Переменные окружения» выше.
 
 ### Обработка ошибок
 
