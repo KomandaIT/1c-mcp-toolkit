@@ -392,14 +392,6 @@ class ChannelCommandQueue:
             raise
     
     async def get_stats(self) -> Dict[str, int]:
-        """
-        Get statistics of pending commands by channel.
-        
-        Makes a snapshot under lock, iterates outside lock.
-        
-        Returns:
-            Dictionary mapping channel_id to number of pending commands.
-        """
         # Under lock: make snapshot
         async with self._lock:
             channels_snapshot: List[Tuple[str, CommandQueue]] = list(self._channels.items())
@@ -411,10 +403,36 @@ class ChannelCommandQueue:
             if count > 0:
                 stats[channel] = count
         return stats
+
+    async def pending_count_for(self, channel: str) -> int:
+        """Число ожидающих команд конкретного канала (O(1), без снапшота
+        всех каналов) — дешёвая проверка для горячего пути tools/call."""
+        async with self._lock:
+            queue = self._channels.get(channel)
+        if queue is None:
+            return 0
+        return await queue.get_pending_count()
     
     def get_active_channels_count(self) -> int:
         """Get the number of active channels."""
         return len(self._channels)
+
+    async def sweep_expired(self, max_age_seconds: float) -> int:
+        """Периодическая уборка (lifespan-воркер): cleanup_expired по всем
+        каналам, закрытые (пустые) очереди каналов удаляются — против
+        неограниченного роста _channels/_pending/_results."""
+        removed = 0
+        async with self._lock:
+            channels_snapshot: List[Tuple[str, CommandQueue]] = list(self._channels.items())
+        for channel, queue in channels_snapshot:
+            removed += await queue.cleanup_expired(max_age_seconds)
+            async with queue._lock:
+                idle = not queue._pending and len(queue._queue) == 0
+            if idle:
+                async with self._lock:
+                    if channel in self._channels and self._channels[channel] is queue:
+                        self._channels.pop(channel, None)
+        return removed
     
     async def _get_command_channel(self, command_id: str) -> Optional[str]:
         """Get the channel for a command (for testing)."""

@@ -17,6 +17,7 @@ Login ограничен по числу попыток (в памяти).
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -102,8 +103,10 @@ def _login_allowed(ip: str) -> bool:
 
 def _login_failed(ip: str) -> None:
     _login_attempts.setdefault(ip, deque()).append(time.time())
-    if len(_login_attempts) > 10_000:
-        _login_attempts.clear()
+    # LRU-эвикция вместо clear(): сброс всех ключей снимал бы лимиты
+    # попыток для всех IP разом (thundering re-allow).
+    while len(_login_attempts) > 10_000:
+        _login_attempts.pop(next(iter(_login_attempts)), None)
 
 
 def _authorized(request: Request) -> bool:
@@ -194,11 +197,15 @@ async def files(request: Request) -> JSONResponse:
     for path in paths[(page_no - 1) * _FILES_PER_PAGE: page_no * _FILES_PER_PAGE]:
         try:
             stat = path.stat()
+            # Подсчёт строк может занять секунды на большом JSONL — off-loop.
+            records = await asyncio.to_thread(
+                lambda p=path: sum(1 for _ in open(p, encoding="utf-8"))
+            )
             items.append({
                 "name": path.name,
                 "size": stat.st_size,
                 "mtime": stat.st_mtime,
-                "records": sum(1 for _ in open(path, encoding="utf-8")),
+                "records": records,
             })
         except OSError:
             continue

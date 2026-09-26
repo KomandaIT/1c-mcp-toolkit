@@ -118,10 +118,13 @@ class DictionaryPreloader:
                     return  # loaded by a concurrent path
 
                 started = time.monotonic()
-                cached = self._read_cache(channel)
+                cached = await asyncio.to_thread(self._read_cache, channel)
                 if cached is not None:
                     terms, age = cached
-                    matcher = self._build_matcher(channel, terms)
+                    # Сборка Aho-Corasick на 50k термах — CPU: off-loop.
+                    matcher = await asyncio.to_thread(
+                        self._build_matcher, channel, terms
+                    )
                     self._matchers[channel] = matcher
                     logger.info(
                         f"Dictionary for channel '{channel}' loaded from cache: "
@@ -167,9 +170,13 @@ class DictionaryPreloader:
                             )
                         if not terms:
                             raise RuntimeError("no dictionary terms fetched")
-                        matcher = self._build_matcher(channel, terms)
+                        # Heavy: fetch уже off-loop-безопасен (await), build —
+                        # CPU на 50k термах, запись кэша — файловый I/O.
+                        matcher = await asyncio.to_thread(
+                            self._build_matcher, channel, terms
+                        )
                         self._matchers[channel] = matcher
-                        self._write_cache(channel, terms)
+                        await asyncio.to_thread(self._write_cache, channel, terms)
                         logger.info(
                             f"Dictionary revalidated for channel '{channel}': "
                             f"{matcher.term_count} terms in "
@@ -202,9 +209,11 @@ class DictionaryPreloader:
                     )
                 if not terms:
                     raise RuntimeError("no dictionary terms fetched")
-                matcher = self._build_matcher(channel, terms)
+                matcher = await asyncio.to_thread(
+                    self._build_matcher, channel, terms
+                )
                 self._matchers[channel] = matcher
-                self._write_cache(channel, terms)
+                await asyncio.to_thread(self._write_cache, channel, terms)
                 logger.info(
                     f"Dictionary loaded for channel '{channel}': "
                     f"{matcher.term_count} terms in {time.monotonic() - started:.2f}s"

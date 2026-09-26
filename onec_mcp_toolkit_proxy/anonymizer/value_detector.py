@@ -406,6 +406,17 @@ class _SharedNER:
         return cls._segmenter, cls._ner_tagger
 
 
+def preload_shared_ner() -> bool:
+    """Прогрев Natasha на старте: загрузка модели — секунды CPU, поэтому
+    выполняется в потоковом пуле из lifespan, а не на первом запросе
+    (первый запрос перестаёт ставить event loop на паузу).
+
+    Возвращает True, если NER-детектор доступен.
+    """
+    _SharedNER.get()
+    return _SharedNER._ner_tagger is not None
+
+
 class NERDetector:
     """
     NER-детектор на базе Natasha.

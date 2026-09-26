@@ -164,9 +164,9 @@ async def flush_once() -> int:
                 ts = time.time()
                 record = {"ts": ts, "tool": "unknown", "raw": str(raw)[:2000]}
             by_file.setdefault(_file_for(ts), []).append(raw)
-        for path, lines in by_file.items():
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write("\n".join(lines) + "\n")
+        # Файловый I/O (до ~100k строк батча) — в потоковом пуле, чтобы
+        # не блокировать event loop toolkit'а.
+        await asyncio.to_thread(_append_files, by_file)
         written += len(batch)
         # Очистить обработанный диапазон (возможен дубликат при падении —
         # допустимо, см. docstring).
@@ -174,15 +174,26 @@ async def flush_once() -> int:
     return written
 
 
+def _append_files(by_file: dict[Path, list[str]]) -> None:
+    for path, lines in by_file.items():
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+
 async def retention_cleanup() -> int:
     """Удалить файлы старше CORPUS_RETENTION_DAYS. Возвращает число удалённых."""
     cutoff = time.time() - settings.corpus_retention_days * 86400
     removed = 0
     try:
-        for path in _corpus_dir().glob("corpus-*.jsonl"):
-            if path.stat().st_mtime < cutoff:
-                path.unlink()
-                removed += 1
+        def _cleanup() -> int:
+            count = 0
+            for path in _corpus_dir().glob("corpus-*.jsonl"):
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    count += 1
+            return count
+
+        removed = await asyncio.to_thread(_cleanup)
     except OSError as exc:
         logger.warning("corpus retention failed: %s", exc)
     return removed

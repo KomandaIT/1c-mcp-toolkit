@@ -334,11 +334,12 @@ async def _execute_1c_command(tool: str, params: Dict[str, Any], channel: str = 
     """
     effective_timeout = float(timeout if timeout is not None else settings.timeout)
     # Check if 1C client is connected by checking if there was recent activity
-    # If there are too many pending commands, 1C might not be connected
-    channel_stats = await channel_command_queue.get_stats()
-    pending_count = sum(channel_stats.values())
+    # If there are too many pending commands, 1C might not be connected.
+    # Дешёвая проверка: только свою очередь канала (O(1)), без глобального
+    # снапшота всех каналов под общим локом на каждом вызове.
+    pending_count = await channel_command_queue.pending_count_for(channel)
     logger.debug(f"Executing {tool} command on channel '{channel}', pending commands: {pending_count}")
-    
+
     # Warning if many commands are pending (possible 1C disconnection)
     if pending_count > 10:
         logger.warning(
@@ -390,7 +391,11 @@ async def _execute_1c_command(tool: str, params: Dict[str, Any], channel: str = 
         if corpus.is_tool_recordable(tool):
             raw_snapshot = result
             if _do_anon:
-                result = anon.anonymize_response(result, tool_name=tool)
+                # NER/регексы — CPU-тяжёлые: выполняем в потоковом пуле,
+                # чтобы не фризить event loop для остальных каналов.
+                result = await asyncio.to_thread(
+                    anon.anonymize_response, result, tool_name=tool
+                )
                 asyncio.ensure_future(corpus.add_record(corpus.build_record(
                     tool=tool, channel=channel, raw_result=raw_snapshot,
                     anonymized_result=result,
@@ -400,7 +405,9 @@ async def _execute_1c_command(tool: str, params: Dict[str, Any], channel: str = 
                     tool=tool, channel=channel, raw_result=raw_snapshot,
                 )))
         elif _do_anon:
-            result = anon.anonymize_response(result, tool_name=tool)
+            result = await asyncio.to_thread(
+                anon.anonymize_response, result, tool_name=tool
+            )
 
         if _do_anon and tool == "execute_query" and not requested_schema and isinstance(result, dict):
             result = dict(result)

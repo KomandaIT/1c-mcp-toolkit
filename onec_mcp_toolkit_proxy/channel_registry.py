@@ -20,28 +20,34 @@ CHANNEL_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 DEFAULT_CHANNEL = "default"
 
 
+_MAX_SESSIONS = 50_000  # предохранитель памяти (Streamable HTTP не
+# дерегистрирует сессии явным образом — эвикция самых старых по вставке).
+
+
 class ChannelRegistry:
     """
     Registry for storing session_id -> channel_id mappings.
-    
+
     This is the single source of truth for channel validation and
     session-to-channel mapping in the system.
     """
-    
+
     def __init__(self):
         self._sessions: Dict[str, str] = {}  # session_id -> channel_id
         self._anonymize_enabled: Dict[str, bool] = {}  # channel_id -> anonymize_pii flag
-    
+
     def register(self, session_id: str, channel_id: str) -> None:
         """
         Register a channel for a session.
-        
+
         Args:
             session_id: The MCP session ID (hex string)
             channel_id: The channel ID to associate with the session
         """
         validated_channel = self.validate_channel_id(channel_id)
         self._sessions[session_id] = validated_channel
+        while len(self._sessions) > _MAX_SESSIONS:
+            self._sessions.pop(next(iter(self._sessions)), None)
         logger.info(f"Registered session {session_id[:8]}... to channel '{validated_channel}'")
     
     def get_channel(self, session_id: str) -> str:

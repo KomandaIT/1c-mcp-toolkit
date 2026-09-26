@@ -199,6 +199,35 @@ async def lifespan(app: Starlette):
     if settings.corpus_enabled:
         corpus_task = asyncio.ensure_future(corpus.flush_worker_forever())
 
+    # Прогрев Natasha NER на старте (из потокового пула): иначе первый
+    # анонимизируемый запрос ставил бы весь event loop на паузу на секунды.
+    if settings.anonymization_enabled and settings.anonymization_ner_enabled:
+        try:
+            from .anonymizer.value_detector import preload_shared_ner
+
+            available = await asyncio.to_thread(preload_shared_ner)
+            logger.info(f"NER preload: {'available' if available else 'not available'}")
+        except Exception as e:  # прогрев никогда не ломает старт
+            logger.warning(f"NER preload skipped: {e}")
+
+    # Sweeper: cleanup_expired по каналам/очередям команд (иначе
+    # _channels/_pending растут неограниченно при чурне сессий).
+    async def state_sweeper() -> None:
+        from .command_queue import channel_command_queue
+
+        while True:
+            await asyncio.sleep(300)
+            try:
+                removed = await channel_command_queue.sweep_expired(
+                    max_age_seconds=settings.timeout * 3
+                )
+                if removed:
+                    logger.debug(f"Sweeper: removed {removed} expired commands")
+            except Exception as e:
+                logger.debug(f"state sweeper error: {e}")
+
+    sweeper_task = asyncio.ensure_future(state_sweeper())
+
     # Start the MCP session manager
     async with mcp_server.session_manager.run():
         yield
@@ -206,6 +235,7 @@ async def lifespan(app: Starlette):
     # Shutdown
     if corpus_task is not None:
         corpus_task.cancel()
+    sweeper_task.cancel()
     logger.info("1C MCP Toolkit Proxy shutting down")
 
 
